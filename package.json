@@ -1,0 +1,35 @@
+{
+  "name": "premier",
+  "version": "1.0.0",
+  "description": "This extension for Azot lets you to download content from the Premier streaming service.",
+  "homepage": "https://premier.one",
+  "config": {
+    "title": "Premier",
+    "icon": "https://static.rustore.ru/imgproxy/5d3uwmhShtDWHj6Tm41ge93bVXC06pT8iIdGdPrvBVc/preset:app_card_icon/aHR0cHM6Ly9zdGF0aWMucnVzdG9yZS5ydS9hcGsvMjQ2NDYzL2NvbnRlbnQvSUNPTi80MWJkMzE2NC1lMTU2LTRjNWQtOWZjNS05NmMwNzE2ZTBlNWIucG5n.webp"
+  },
+  "keywords": [
+    "streaming-services"
+  ],
+  "author": {
+    "name": "Perfect03"
+  },
+  "license": "MIT",
+  "main": "dist/main.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "azt dev",
+    "build": "azt build",
+    "test": "vitest"
+  },
+  "engines": {
+    "azot": ">=4.3.10"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.0",
+    "azot": "^5.0.0-alpha.9",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

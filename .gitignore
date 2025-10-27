@@ -1,0 +1,8 @@
+/node_modules
+/logs
+/dist
+/package
+*.zip
+*.tgz
+.DS_Store
+.idea
