@@ -25,14 +25,15 @@ export default defineExtension({
         if (content.seasons_count) {
           // if series
           const eps = utils.extendEpisodes(args.episodes);
-          const seasonsMetadata = 
+          const seasonsMetadata =
             ((await fetchSeasonMetainfo(title)) ?? [])
             .filter(el => !season || el.number == season)
             .filter(el => !eps.items.size || eps.has(undefined, el.number))
+          const seasonNumbers = new Set(seasonsMetadata.map(el => el.number));
 
-          for (const season of seasonsMetadata) {
+          for (const seasonNumber of seasonNumbers) {
             const episodesMetadata = 
-              (await fetchVideoInfo(title, 'series', season.number))
+              (await fetchVideoInfo(title, 'series', seasonNumber))
               .filter(el => !episode || el.episode == episode)
               .filter(el => !eps.items.size || eps.has(el.episode, el.season))
 
