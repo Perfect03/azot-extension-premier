@@ -1,6 +1,6 @@
 {
   "name": "premier",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "This extension for Azot lets you to download content from the Premier streaming service.",
   "homepage": "https://premier.one",
   "config": {
@@ -11,7 +11,8 @@
     "streaming-services"
   ],
   "author": {
-    "name": "Perfect03"
+    "name": "Perfect03",
+    "email": "username@gmail.com"
   },
   "license": "MIT",
   "main": "dist/main.js",
