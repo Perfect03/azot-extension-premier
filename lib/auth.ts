@@ -1,91 +1,92 @@
-import { DEFAULT_HEADERS, ROUTES, DEVICE } from './constants';
-import { input } from 'azot';
+import { abortable, confirm, ExtensionError, z, type AuthRequest } from "azot/v2";
+import { request } from "./api.ts";
+import { ROUTES, DEVICE } from "./constants.ts";
 
-export const checkAuth = async () => {
-  const token = localStorage.getItem('accessToken')
-  const expires = localStorage.getItem('expiresAt')
-  if (token && expires) {
-    if (Date.parse(expires) < Date.now()) {
-      console.log('Время жизни токена истекло. Пожалуйста, авторизуйтесь заново:');
-    }
-    else return;
+const registrationSchema = z.object({ result: z.object({ activationCode: z.string().min(1) }) });
+const activationSchema = z.object({
+  result: z.discriminatedUnion("isActivated", [
+    z.object({ isActivated: z.literal(false) }),
+    z.object({
+      isActivated: z.literal(true),
+      device: z.object({
+        accessTokenExpiredAt: z.string(),
+        accessToken: z.string().min(1),
+        refreshToken: z.string(),
+        umaTokens: z.object({ accessToken: z.string().min(1), refreshToken: z.string() }),
+        id: z.union([z.string(), z.number()]),
+      }),
+      user: z.object({ username: z.string().optional() }).optional(),
+    }),
+  ]),
+});
+
+export const getAuthState = () => ({
+  authenticated: Boolean(
+    localStorage.getItem("accessToken") &&
+    localStorage.getItem("umaAccessToken") &&
+    Date.parse(localStorage.getItem("expiresAt") ?? "") > Date.now(),
+  ),
+  user: localStorage.getItem("username") ?? undefined,
+});
+
+export const signOut = () => {
+  for (const key of [
+    "expiresAt",
+    "accessToken",
+    "refreshToken",
+    "umaAccessToken",
+    "umaRefreshToken",
+    "deviceId",
+    "username",
+  ]) {
+    localStorage.removeItem(key);
   }
-  await auth();
 };
 
-export const registerDevice = async () => {
-  console.debug('Регистрация устройства...');
+/** Pairs a TV device only when the host explicitly requests interactive login. */
+export const signIn = async ({ method, signal }: AuthRequest) => {
+  signal?.throwIfAborted();
+  if (method !== "interactive") {
+    throw new Error("Premier supports interactive device login only");
+  }
 
-  const response = await fetch(ROUTES.smartRegister, {
-    method: 'POST',
-    headers: DEFAULT_HEADERS,
-    body: JSON.stringify(DEVICE),
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const registration = await request(ROUTES.smartRegister, registrationSchema, {
+      method: "POST",
+      body: JSON.stringify(DEVICE),
+      signal,
+    });
+    const code = registration.result.activationCode;
+    const confirmed = await abortable(
+      confirm(`Введите код ${code} на https://premier.one/profile/tv`, {
+        title: "Вход в Premier",
+        primaryAction: { title: "Устройство подключено" },
+      }),
+      signal,
+    );
+    signal?.throwIfAborted();
+    if (!confirmed) throw new DOMException("Premier sign-in was cancelled", "AbortError");
+
+    const { result } = await request(ROUTES.smartCheck(code), activationSchema, { signal });
+    signal?.throwIfAborted();
+    if (!result.isActivated) continue;
+
+    const values = {
+      expiresAt: result.device.accessTokenExpiredAt,
+      accessToken: result.device.accessToken,
+      refreshToken: result.device.refreshToken,
+      umaAccessToken: result.device.umaTokens.accessToken,
+      umaRefreshToken: result.device.umaTokens.refreshToken,
+      deviceId: String(result.device.id),
+    };
+    signOut();
+    for (const item of Object.entries(values)) localStorage.setItem(item[0], item[1]);
+    if (result.user?.username) localStorage.setItem("username", result.user.username);
+    return;
+  }
+
+  throw new ExtensionError({
+    code: "AUTH_REQUIRED",
+    message: "Не удалось активировать устройство Premier после 10 попыток",
   });
-
-  if (response.status !== 200) {
-    throw new Error('Ошибка при регистрации устройства');
-  }
-
-  const data = await response.json();
-  return data.result.activationCode;
-}
-
-export const checkDevice = async (code: string) => {
-  console.debug('Confirm registering device...');
-
-  const response = await fetch(ROUTES.smartCheck(code), {
-    headers: DEFAULT_HEADERS,
-  });
-
-  if (response.status == 200) {
-    const device = await response.json()
-    if (device?.result?.isActivated) saveAuth({
-      expiresAt: device.result.device.accessTokenExpiredAt,
-      accessToken: device.result.device.accessToken,
-      refreshToken: device.result.device.refreshToken,
-      umaAccessToken: device.result.device.umaTokens.accessToken,
-      umaRefreshToken: device.result.device.umaTokens.refreshToken,
-      deviceId: device.result.device.id
-    })
-    return device
-  }
-}
-
-
-export const auth = async () => {
-  let confirmationAttempts = 0;
-  const maxConfirmationAttempts = 10;
-
-  while (confirmationAttempts < maxConfirmationAttempts) {
-    confirmationAttempts++;
-
-    try {
-      const activationCode = await registerDevice();
-      console.log(`Введите код ${activationCode} на https://premier.one/profile/tv`);
-      await input(`Введите код ${activationCode} на https://premier.one/profile/tv`, { fields: { confirm: { label: 'Нажмите Enter, когда устройство будет подключено', type: 'confirm' } }})
-
-      const authData = await checkDevice(activationCode);
-      console.debug(`Profile: ${authData}`);
-
-      if (authData?.result?.user?.username) return authData;
-      else {
-        console.error("Код не был активирован. Пожалуйста, повторите попытку");
-        await auth();
-        return;
-      }
-    } catch (error) {
-      console.error('Authorization error:', error.message);
-      throw error;
-    }
-  }
-
-  throw new Error('The maximum number of code entry attempts has been exceeded');
-}
-
-const saveAuth = (data: Record<string, string>) => {
-  Object.entries(data).forEach(([key, value]) => localStorage.setItem(key, value))
-}
-
-export const exit = async () => {
-  localStorage.clear();
 };
