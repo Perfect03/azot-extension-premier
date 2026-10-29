@@ -1,0 +1,9 @@
+{
+  "manifestVersion": 1,
+  "displayName": "PREMIER",
+  "matches": ["https://*.premier.one/*"],
+  "capabilities": {
+    "auth": { "methods": ["interactive"] },
+    "drm": { "systems": ["widevine"] }
+  }
+}

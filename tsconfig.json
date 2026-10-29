@@ -1,15 +1,18 @@
 {
   "compilerOptions": {
-    "rootDir": "./",
-    "outDir": "./dist",
-    "declaration": true,
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "sourceMap": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
     "strict": true,
-    "esModuleInterop": true,
-    "target": "ESNext",
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "lib": ["ESNext", "DOM"],
+    "types": ["node"],
+    "target": "ESNext"
   },
-  "include": ["main.ts", "lib/**/*"],
+  "include": ["main.ts", "main.test.ts", "lib/**/*.ts", "vitest.config.ts"],
   "exclude": ["node_modules"]
 }

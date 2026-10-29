@@ -1,87 +1,83 @@
-import type { IContentMetadata, IPlayOptions, IVideoInfo, ISeasonMetadata } from './types';
-import {  DEFAULT_HEADERS, ROUTES } from './constants';
-import { auth, exit } from './auth';
+import { ExtensionError, z } from "azot/v2";
+import { DEFAULT_HEADERS, ROUTES } from "./constants.ts";
+import {
+  contentMetadataSchema,
+  seasonMetadataSchema,
+  videoInfoResponseSchema,
+  playOptionsSchema,
+} from "./types.ts";
 
-const request = async <T>(url: string, method: string = 'GET', params?: Record<string, string|number>) => {
-  console.debug(`Getting data from ${url}...`);
+const errorResponseSchema = z.object({ success: z.literal(false), message: z.string().optional() });
 
-  const query = new URLSearchParams(params || {}).toString();
+/** Validates Premier responses without prompting or terminating the host on failure. */
+export const request = async <TSchema extends z.ZodType>(
+  url: string | URL,
+  schema: TSchema,
+  init: Pick<RequestInit, "method" | "body" | "signal"> = {},
+): Promise<z.output<TSchema>> => {
+  const headers = new Headers(DEFAULT_HEADERS);
+  const token = localStorage.getItem("umaAccessToken");
+  if (token) headers.set("Authorization", `JWTBearer ${token}`);
 
-  const response = await fetch(`${url}?${query}`, {
-    method,
-    headers: {
-      ...DEFAULT_HEADERS,
-      'Content-Type': method == 'GET' ? '*/*' : 'application/json',
-      Authorization: `JWTBearer ${localStorage.getItem('umaAccessToken')}`,
-    },
-  });
-  const data = (await response.text()) || '';
+  const response = await fetch(url, { ...init, headers });
   if (response.status === 401) {
-    console.error(`Unauthorized: ${url}?${query}`);
-    console.debug(data);
-    exit();
-    const login = await auth();
-    if (login?.authentication_token) {
-      await request(url, method, params);
-    }
-    return;
+    throw new ExtensionError({
+      code: "AUTH_REQUIRED",
+      message: "Требуется вход в аккаунт Premier",
+      operation: "request",
+    });
   }
-  
-  response.status === 400 && console.error(`Bad Request: ${url}?${query}`);
-  const isSuccess = response.status === 200;
-  if (!isSuccess) console.debug(`Request failed. Route: ${url}?${query}. ${data}`);
-  try {
-    const parsed = JSON.parse(data)
-    if (parsed.success === false) {
-      exit();
-      console.error(parsed.message || 'Unexpected Error');
-      await auth();
-      await request(url, method, params);
-      return;
-    }
-    return parsed as T;
-  } catch (e) {
-    console.debug(data);
-    console.debug(e as any);
-    console.error(`Parsing JSON response failed. Route: ${url}?${query}`);
-    process.exit(1);
+  if (!response.ok) {
+    throw new ExtensionError({
+      code: response.status === 429 ? "RATE_LIMITED" : "UNKNOWN",
+      message: `Premier request failed (${response.status})`,
+      operation: "request",
+    });
   }
+
+  const data: unknown = await response.json();
+  const errorResponse = errorResponseSchema.safeParse(data);
+  if (errorResponse.success) {
+    throw new ExtensionError({
+      code: "UNKNOWN",
+      message: errorResponse.data.message || "Premier request failed",
+      operation: "request",
+    });
+  }
+  return schema.parse(data);
 };
 
-export const fetchTitleMetainfo = async (slug: string) => {
-  return request<IContentMetadata>(`${ROUTES.metainfo(slug)}`);
-};
+export const fetchTitleMetainfo = (slug: string, signal?: AbortSignal) =>
+  request(ROUTES.metainfo(slug), contentMetadataSchema, { signal });
 
-export const fetchSeasonMetainfo = async (slug: string) => {
-  return request<ISeasonMetadata[]>(`${ROUTES.season(slug)}`);
-};
+export const fetchSeasonMetainfo = (slug: string, signal?: AbortSignal) =>
+  request(ROUTES.season(slug), seasonMetadataSchema, { signal });
 
-export const fetchVideoInfo = async (slug: string, type: 'movie'|'series' = 'movie', season: number = 0) => {
-  if (type == 'movie') {
-    const results = await request<{results: IVideoInfo[]}>(ROUTES.videoinfo(slug)) ?? {results: [] as IVideoInfo[]}
-    return results.results
+export const fetchVideoInfo = async (
+  slug: string,
+  type: "movie" | "series",
+  season: number,
+  signal?: AbortSignal,
+) => {
+  if (type === "movie") {
+    return (await request(ROUTES.videoinfo(slug), videoInfoResponseSchema, { signal })).results;
   }
-  else {
-    let page = 1;
-    const limit = 100;
-    let results: IVideoInfo[] = [];
-    let hasNext = true;
 
-    while (hasNext) {
-      const response = await request<{
-        results: IVideoInfo[];
-        has_next: boolean;
-      }>(ROUTES.videoinfo(slug), 'GET', { page, limit, season });
-
-      if (response) results = results.concat(response.results);
-      hasNext = Boolean(response?.has_next);
-      page++;
-    }
-
-    return results;
+  let page = 1;
+  const results: z.output<typeof videoInfoResponseSchema>["results"] = [];
+  while (true) {
+    const url = new URL(ROUTES.videoinfo(slug));
+    url.search = new URLSearchParams({
+      page: String(page),
+      limit: "100",
+      season: String(season),
+    }).toString();
+    const response = await request(url, videoInfoResponseSchema, { signal });
+    results.push(...response.results);
+    if (!response.has_next) return results;
+    page++;
   }
 };
 
-export const fetchPlayOptions = async (contentId: string) => {
-  return request<IPlayOptions>(ROUTES.playOptions(contentId));
-};
+export const fetchPlayOptions = (contentId: string, signal?: AbortSignal) =>
+  request(ROUTES.playOptions(contentId), playOptionsSchema, { signal });
