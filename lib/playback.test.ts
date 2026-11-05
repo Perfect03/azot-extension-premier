@@ -120,7 +120,6 @@ test.each([400, 401, 403, 429, 500])("reports Premier license HTTP %i without an
       code: "UNKNOWN",
       message: `Premier license request failed (${status})`,
       operation: "requestLicense",
-      details: { contentId: "video-id", status, requestBytes: 1, responseBody: "" },
       cause: expect.any(Error),
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -169,7 +168,11 @@ test("keeps the last provider diagnostics after five failed restriction lookups"
     await expect(requestLicense({ system: "widevine", resource, data: new Uint8Array([1]), options: {} }))
       .rejects.toMatchObject({
         code: "UNKNOWN", message: "Premier license request failed (400)",
-        details: { responseBody: { title: "Failed to get license restrictions" } },
+        cause: new Error(JSON.stringify({
+          contentId: "video-id", status: 400,
+          title: "Failed to get license restrictions",
+          detail: "Remote server is not available or returned error code",
+        })),
       });
     expect(fetchMock).toHaveBeenCalledTimes(6);
     expect(sleep.mock.calls).toEqual([[1000], [2000], [4000], [8000]]);
@@ -223,10 +226,7 @@ test("cancels a license retry during backoff", async () => {
   }
 });
 
-test.each([
-  { licenseUrl: undefined, message: "Premier license URL is missing" },
-  { licenseUrl, message: "Premier license response is invalid" },
-])("reports $message without an Azot account error", async ({ licenseUrl, message }) => {
+test("logs only redacted provider reasons and content ID", async () => {
   const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
     Response.json({
       extended_balancer: { dash: { balancer_url: manifestUrl, license_url: licenseUrl } },
@@ -234,16 +234,21 @@ test.each([
   );
   const resource = await resolveEntry({ url: pageUrl, options: {}, entry });
   try {
-    fetchMock.mockResolvedValueOnce(Response.json({ error: "Invalid license" }));
+    fetchMock.mockResolvedValueOnce(Response.json({
+      title: "Access denied",
+      detail: "Rejected https://license.test/?sign=secret-signature Bearer secret-token",
+      token: "private-token",
+      license: "private-license",
+    }, { status: 403 }));
 
     await expect(
       requestLicense({ system: "widevine", resource, data: new Uint8Array([1]), options: {} }),
     ).rejects.toMatchObject({
-      code: "UNKNOWN", message, operation: "requestLicense",
-      ...(licenseUrl ? {
-        details: { contentId: "video-id", status: 200, responseBody: { error: "Invalid license" } },
-        cause: expect.any(Error),
-      } : {}),
+      code: "UNKNOWN",
+      cause: new Error(JSON.stringify({
+        contentId: "video-id", status: 403, title: "Access denied",
+        detail: "Rejected [redacted] [redacted]",
+      })),
     });
   } finally {
     resource.input.dispose();

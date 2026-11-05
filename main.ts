@@ -1,4 +1,4 @@
-import { abortable, defineExtension, ExtensionError, Input, sleep, UrlSource, utils, type MediaEntry } from "azot/v2";
+import { abortable, defineExtension, ExtensionError, Input, sleep, UrlSource, utils, z, type MediaEntry } from "azot/v2";
 import { getAuthState, signIn, signOut } from "./lib/auth.ts";
 import {
   fetchTitleMetainfo,
@@ -7,9 +7,18 @@ import {
   fetchPlayOptions,
 } from "./lib/api.ts";
 import { parsePremierUrl } from "./lib/helpers.ts";
-import { createLicenseError, isTransientLicenseError } from "./lib/license-errors.ts";
 
 const LICENSE_REQUEST_ATTEMPTS = 5;
+const licenseProblemSchema = z.object({
+  title: z.string().max(512).optional(),
+  detail: z.string().max(512).optional(),
+});
+
+const redactLicenseReason = (reason: string) =>
+  reason
+    .replace(/https?:\/\/\S+|\b(?:Bearer|JWTBearer|Basic)\s+\S+/gi, "[redacted]")
+    .replace(/\b(?:token|password|secret|cookie|signature)\s*[:=]\s*\S+/gi, "[redacted]")
+    .replace(/[A-Za-z0-9+/_=-]{32,}/g, "[redacted]");
 
 type PremierContext = {
   licenseUrl?: string;
@@ -110,19 +119,27 @@ export default defineExtension<PremierContext>({
           signal,
         });
         if (response.ok) break;
-        const error = await createLicenseError({
+        const parsed = licenseProblemSchema.safeParse(await response.json().catch(() => null));
+        const problem = parsed.success ? parsed.data : {};
+        const isTransient = response.status === 400
+          && problem.title === "Failed to get license restrictions"
+          && problem.detail === "Remote server is not available or returned error code";
+        if (isTransient && attempt < LICENSE_REQUEST_ATTEMPTS) {
+          await abortable(sleep(2 ** (attempt - 1) * 1000), signal);
+          continue;
+        }
+        throw new ExtensionError({
+          code: "UNKNOWN",
           message: `Premier license request failed (${response.status})`,
-          response,
-          contentId: resource.entry.id,
-          licenseUrl,
-          requestBytes: data.byteLength,
+          operation: "requestLicense",
+          // The host includes causes in exported logs, but skips extension-specific details.
+          cause: new Error(JSON.stringify({
+            contentId: resource.entry.id,
+            status: response.status,
+            title: problem.title && redactLicenseReason(problem.title),
+            detail: problem.detail && redactLicenseReason(problem.detail),
+          })),
         });
-        if (attempt >= LICENSE_REQUEST_ATTEMPTS || !isTransientLicenseError(error)) throw error;
-        const delayMs = 2 ** (attempt - 1) * 1000;
-        console.debug("Premier license restriction service unavailable; retrying", {
-          contentId: resource.entry.id, attempt, delayMs,
-        });
-        await abortable(sleep(delayMs), signal);
       }
       const license = new Uint8Array(await response.arrayBuffer());
       if (license[0] !== 0x7b) return license;
@@ -132,13 +149,10 @@ export default defineExtension<PremierContext>({
         .decode(license)
         .match(/"(CAIS[A-Za-z0-9+/=]*)"/)?.[1];
       if (!encodedLicense) {
-        throw await createLicenseError({
+        throw new ExtensionError({
+          code: "UNKNOWN",
           message: "Premier license response is invalid",
-          response,
-          contentId: resource.entry.id,
-          licenseUrl,
-          requestBytes: data.byteLength,
-          body: license,
+          operation: "requestLicense",
         });
       }
       return Uint8Array.fromBase64(encodedLicense);
