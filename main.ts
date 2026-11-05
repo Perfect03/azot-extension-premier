@@ -1,4 +1,4 @@
-import { defineExtension, ExtensionError, Input, UrlSource, utils, type MediaEntry } from "azot/v2";
+import { abortable, defineExtension, ExtensionError, Input, sleep, UrlSource, utils, type MediaEntry } from "azot/v2";
 import { getAuthState, signIn, signOut } from "./lib/auth.ts";
 import {
   fetchTitleMetainfo,
@@ -7,6 +7,9 @@ import {
   fetchPlayOptions,
 } from "./lib/api.ts";
 import { parsePremierUrl } from "./lib/helpers.ts";
+import { createLicenseError, isTransientLicenseError } from "./lib/license-errors.ts";
+
+const LICENSE_REQUEST_ATTEMPTS = 5;
 
 type PremierContext = {
   licenseUrl?: string;
@@ -91,23 +94,35 @@ export default defineExtension<PremierContext>({
       const licenseUrl = resource.entry.context?.licenseUrl;
       if (!licenseUrl) {
         throw new ExtensionError({
-          code: "DRM_UNAUTHORIZED",
+          code: "UNKNOWN",
           message: "Premier license URL is missing",
+          operation: "requestLicense",
         });
       }
 
-      const response = await fetch(licenseUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/octet-stream" },
-        body: data,
-        signal,
-      });
-      if (!response.ok) {
-        throw new ExtensionError({
-          code: "DRM_UNAUTHORIZED",
-          message: `Premier license request failed (${response.status})`,
-          operation: "requestLicense",
+      let response: Response;
+      for (let attempt = 1; ; attempt++) {
+        signal?.throwIfAborted();
+        response = await fetch(licenseUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: data,
+          signal,
         });
+        if (response.ok) break;
+        const error = await createLicenseError({
+          message: `Premier license request failed (${response.status})`,
+          response,
+          contentId: resource.entry.id,
+          licenseUrl,
+          requestBytes: data.byteLength,
+        });
+        if (attempt >= LICENSE_REQUEST_ATTEMPTS || !isTransientLicenseError(error)) throw error;
+        const delayMs = 2 ** (attempt - 1) * 1000;
+        console.debug("Premier license restriction service unavailable; retrying", {
+          contentId: resource.entry.id, attempt, delayMs,
+        });
+        await abortable(sleep(delayMs), signal);
       }
       const license = new Uint8Array(await response.arrayBuffer());
       if (license[0] !== 0x7b) return license;
@@ -117,9 +132,13 @@ export default defineExtension<PremierContext>({
         .decode(license)
         .match(/"(CAIS[A-Za-z0-9+/=]*)"/)?.[1];
       if (!encodedLicense) {
-        throw new ExtensionError({
-          code: "DRM_UNAUTHORIZED",
+        throw await createLicenseError({
           message: "Premier license response is invalid",
+          response,
+          contentId: resource.entry.id,
+          licenseUrl,
+          requestBytes: data.byteLength,
+          body: license,
         });
       }
       return Uint8Array.fromBase64(encodedLicense);
