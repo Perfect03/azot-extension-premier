@@ -4,5 +4,7 @@
 /package
 *.zip
 *.tgz
+!/vendor/types-eme-*.tgz
+/manifest.json
 .DS_Store
 .idea

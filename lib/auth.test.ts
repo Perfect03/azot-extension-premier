@@ -1,12 +1,10 @@
 import { afterEach, expect, test, vi } from "vitest";
-import * as Azot from "azot/v2";
+import { invoke } from "azot/vitest";
+import * as Azot from "azot";
 import extension from "../main.ts";
 import { DEVICE, ROUTES } from "./constants.ts";
 
-const login = extension.auth?.login;
-const getState = extension.auth?.getState;
-const logout = extension.auth?.logout;
-if (!login || !getState || !logout) throw new Error("Premier authentication hooks are missing");
+const { login, getState, logout } = extension.premier.auth;
 
 const activatedDevice = () => ({
   result: {
@@ -30,27 +28,18 @@ test("verifies device activation, stores the session, and logs out", async () =>
     .mockResolvedValueOnce(Response.json({ result: { activationCode: "123456" } }))
     .mockResolvedValueOnce(Response.json(activatedDevice()));
   const confirm = vi.spyOn(Azot, "confirm").mockResolvedValue(true);
-  const signal = new AbortController().signal;
   localStorage.setItem("unrelated-setting", "keep");
   expect(await getState()).toMatchObject({ authenticated: false });
 
-  await login({ method: "interactive", signal });
+  await invoke(() => login({ method: "interactive" }));
 
   expect(confirm).toHaveBeenCalledWith(expect.stringContaining("123456"), expect.any(Object));
   expect(fetchMock).toHaveBeenNthCalledWith(
     1,
     ROUTES.smartRegister,
-    expect.objectContaining({
-      method: "POST",
-      body: JSON.stringify(DEVICE),
-      signal,
-    }),
+    expect.objectContaining({ method: "POST", body: JSON.stringify(DEVICE) }),
   );
-  expect(fetchMock).toHaveBeenNthCalledWith(
-    2,
-    ROUTES.smartCheck("123456"),
-    expect.objectContaining({ signal }),
-  );
+  expect(fetchMock).toHaveBeenNthCalledWith(2, ROUTES.smartCheck("123456"), expect.any(Object));
   expect(await getState()).toEqual({ authenticated: true, user: "test-user" });
   expect(localStorage.getItem("umaAccessToken")).toBe("uma-access-token");
   expect(localStorage.getItem("deviceId")).toBe("123");
@@ -72,7 +61,7 @@ test("checks activation again after an unactivated code", async () => {
     .mockResolvedValueOnce(Response.json(activatedDevice()));
   vi.spyOn(Azot, "confirm").mockResolvedValue(true);
 
-  await login({ method: "interactive" });
+  await invoke(() => login({ method: "interactive" }));
 
   expect(fetchMock).toHaveBeenCalledTimes(4);
   expect(await getState()).toMatchObject({ authenticated: true });
@@ -84,7 +73,9 @@ test("stops pairing when the dialog is cancelled", async () => {
     .mockResolvedValueOnce(Response.json({ result: { activationCode: "123456" } }));
   vi.spyOn(Azot, "confirm").mockResolvedValue(false);
 
-  await expect(login({ method: "interactive" })).rejects.toMatchObject({ name: "AbortError" });
+  await expect(invoke(() => login({ method: "interactive" }))).rejects.toMatchObject({
+    name: "AbortError",
+  });
 
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(await getState()).toMatchObject({ authenticated: false });
@@ -100,9 +91,9 @@ test("aborts a pending pairing dialog without checking or storing activation", a
     return new Promise(() => {});
   });
 
-  await expect(login({ method: "interactive", signal: controller.signal })).rejects.toMatchObject({
-    name: "AbortError",
-  });
+  await expect(
+    invoke(() => login({ method: "interactive" }), controller.signal),
+  ).rejects.toMatchObject({ name: "AbortError" });
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(await getState()).toMatchObject({ authenticated: false });
 });
@@ -115,7 +106,7 @@ test.each<Azot.AuthRequest>([
   const fetchMock = vi.spyOn(globalThis, "fetch");
   const confirm = vi.spyOn(Azot, "confirm");
 
-  await expect(login(request)).rejects.toThrow("interactive device login only");
+  await expect(invoke(() => login(request))).rejects.toThrow("interactive device login only");
 
   expect(fetchMock).not.toHaveBeenCalled();
   expect(confirm).not.toHaveBeenCalled();
@@ -144,7 +135,9 @@ test("stops after ten unactivated pairing attempts", async () => {
     );
   vi.spyOn(Azot, "confirm").mockResolvedValue(true);
 
-  await expect(login({ method: "interactive" })).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
+  await expect(invoke(() => login({ method: "interactive" }))).rejects.toMatchObject({
+    code: "AUTH_REQUIRED",
+  });
 
   expect(fetchMock).toHaveBeenCalledTimes(20);
   expect(await getState()).toMatchObject({ authenticated: false });

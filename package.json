@@ -1,6 +1,6 @@
 {
   "name": "premier",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "keywords": [
     "streaming-services"
   ],
@@ -19,16 +19,26 @@
   "scripts": {
     "dev": "azot dev --input main.ts",
     "build": "azot build --input main.ts",
+    "manifest": "azot manifest --input main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest"
   },
+  "peerDependencies": {
+    "eme": "^0.2.2"
+  },
+  "peerDependenciesMeta": {
+    "eme": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@types/eme": "file:vendor/types-eme-0.2.2.tgz",
     "@types/node": "^24.7.0",
-    "azot": "^5.0.0-alpha.88",
+    "azot": "^5.0.0-beta.8",
     "typescript": "^5.9.3",
     "vitest": "^5.0.5"
   },
   "engines": {
-    "azot": ">=5.0.0-alpha.88"
+    "azot": ">=5.0.0-alpha.96"
   }
 }

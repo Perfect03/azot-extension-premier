@@ -1,4 +1,4 @@
-import { ExtensionError, z } from "azot/v2";
+import { ExtensionError, z } from "azot";
 import { DEFAULT_HEADERS, ROUTES } from "./constants.ts";
 import {
   contentMetadataSchema,
@@ -9,11 +9,13 @@ import {
 
 const errorResponseSchema = z.object({ success: z.literal(false), message: z.string().optional() });
 
-/** Validates Premier responses without prompting or terminating the host on failure. */
+/** Validates Premier responses without prompting or terminating the host on failure.
+ * Cancellation is ambient: the injected fetch already honors Azot.signal.
+ */
 export const request = async <TSchema extends z.ZodType>(
   url: string | URL,
   schema: TSchema,
-  init: Pick<RequestInit, "method" | "body" | "signal"> = {},
+  init: Pick<RequestInit, "method" | "body"> = {},
 ): Promise<z.output<TSchema>> => {
   const headers = new Headers(DEFAULT_HEADERS);
   const token = localStorage.getItem("umaAccessToken");
@@ -24,14 +26,12 @@ export const request = async <TSchema extends z.ZodType>(
     throw new ExtensionError({
       code: "AUTH_REQUIRED",
       message: "Требуется вход в аккаунт Premier",
-      operation: "request",
     });
   }
   if (!response.ok) {
     throw new ExtensionError({
-      code: response.status === 429 ? "RATE_LIMITED" : "UNKNOWN",
+      code: response.status === 429 ? "RATE_LIMITED" : "MEDIA_UNAVAILABLE",
       message: `Premier request failed (${response.status})`,
-      operation: "request",
     });
   }
 
@@ -39,28 +39,20 @@ export const request = async <TSchema extends z.ZodType>(
   const errorResponse = errorResponseSchema.safeParse(data);
   if (errorResponse.success) {
     throw new ExtensionError({
-      code: "UNKNOWN",
+      code: "MEDIA_UNAVAILABLE",
       message: errorResponse.data.message || "Premier request failed",
-      operation: "request",
     });
   }
   return schema.parse(data);
 };
 
-export const fetchTitleMetainfo = (slug: string, signal?: AbortSignal) =>
-  request(ROUTES.metainfo(slug), contentMetadataSchema, { signal });
+export const fetchTitleMetainfo = (slug: string) => request(ROUTES.metainfo(slug), contentMetadataSchema);
 
-export const fetchSeasonMetainfo = (slug: string, signal?: AbortSignal) =>
-  request(ROUTES.season(slug), seasonMetadataSchema, { signal });
+export const fetchSeasonMetainfo = (slug: string) => request(ROUTES.season(slug), seasonMetadataSchema);
 
-export const fetchVideoInfo = async (
-  slug: string,
-  type: "movie" | "series",
-  season: number,
-  signal?: AbortSignal,
-) => {
+export const fetchVideoInfo = async (slug: string, type: "movie" | "series", season: number) => {
   if (type === "movie") {
-    return (await request(ROUTES.videoinfo(slug), videoInfoResponseSchema, { signal })).results;
+    return (await request(ROUTES.videoinfo(slug), videoInfoResponseSchema)).results;
   }
 
   let page = 1;
@@ -72,12 +64,11 @@ export const fetchVideoInfo = async (
       limit: "100",
       season: String(season),
     }).toString();
-    const response = await request(url, videoInfoResponseSchema, { signal });
+    const response = await request(url, videoInfoResponseSchema);
     results.push(...response.results);
     if (!response.has_next) return results;
     page++;
   }
 };
 
-export const fetchPlayOptions = (contentId: string, signal?: AbortSignal) =>
-  request(ROUTES.playOptions(contentId), playOptionsSchema, { signal });
+export const fetchPlayOptions = (contentId: string) => request(ROUTES.playOptions(contentId), playOptionsSchema);

@@ -1,6 +1,9 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { invoke } from "azot/vitest";
 import extension from "./main.ts";
 import { ROUTES } from "./lib/constants.ts";
+
+const { list } = extension.premier;
 
 // Premier returns both the main show and its related catalog under season 4.
 const seasons = [
@@ -76,17 +79,16 @@ test.each([
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
     });
-    const entries = await extension.getEntries({ url, options });
+    const entries = await invoke(() => list({ url, options }));
 
     expect(entries).toEqual(
       expectedVideos.map((video) => ({
         id: video.id,
-        type: "episode",
         title: "Comedy Club",
         episodeNumber: video.episode,
         seasonNumber: video.season,
         episodeTitle: video.title,
-        url,
+        data: { contentId: video.id },
       })),
     );
     const fetchedSeasons = fetchMock.mock.calls
@@ -106,8 +108,8 @@ test("lists movie entries without resolving playback", async () => {
     .mockResolvedValueOnce(Response.json({ name: "Test movie", seasons_count: 0 }))
     .mockResolvedValueOnce(Response.json({ results: [{ id: "movie-id", title: "Test movie" }] }));
 
-  expect(await extension.getEntries({ url, options: {} })).toEqual([
-    { id: "movie-id", type: "movie", title: "Test movie", url },
+  expect(await invoke(() => list({ url, options: {} }))).toEqual([
+    { id: "movie-id", title: "Test movie", data: { contentId: "movie-id" } },
   ]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
@@ -119,19 +121,15 @@ test("collects every page of a selected season", async () => {
     .mockResolvedValueOnce(Response.json([{ number: 4 }]))
     .mockResolvedValueOnce(Response.json({ results: [videos[0]], has_next: true }))
     .mockResolvedValueOnce(Response.json({ results: [videos[1]], has_next: false }));
-  const signal = new AbortController().signal;
 
-  const entries = await extension.getEntries({
-    url: "https://premier.one/show/comedy-club/season/4",
-    options: {},
-    signal,
-  });
+  const entries = await invoke(() =>
+    list({ url: "https://premier.one/show/comedy-club/season/4", options: {} }),
+  );
 
   expect(entries.map((entry) => entry.id)).toEqual(videos.slice(0, 2).map((video) => video.id));
   expect(
     fetchMock.mock.calls.slice(2).map((call) => new URL(String(call[0])).searchParams.get("page")),
   ).toEqual(["1", "2"]);
-  expect(fetchMock.mock.calls.every((call) => call[1]?.signal === signal)).toBe(true);
 });
 
 test("returns no entries when a movie has no videos", async () => {
@@ -140,7 +138,7 @@ test("returns no entries when a movie has no videos", async () => {
     .mockResolvedValueOnce(Response.json({ results: [] }));
 
   expect(
-    await extension.getEntries({ url: "https://premier.one/show/test-movie", options: {} }),
+    await invoke(() => list({ url: "https://premier.one/show/test-movie", options: {} })),
   ).toEqual([]);
 });
 
@@ -150,7 +148,7 @@ test("reports rejected authentication without prompting or retrying", async () =
     .mockResolvedValue(new Response(null, { status: 401 }));
 
   await expect(
-    extension.getEntries({ url: "https://premier.one/show/test-movie", options: {} }),
+    invoke(() => list({ url: "https://premier.one/show/test-movie", options: {} })),
   ).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });

@@ -49,4 +49,6 @@ jobs:
             --generate-notes \
             $PRERELEASE_FLAG \
             "${{ steps.pack_artifact.outputs.artifact_path }}" \
-            "package.json"
+            "package.json" \
+            "manifest.json" \
+            "README.md"

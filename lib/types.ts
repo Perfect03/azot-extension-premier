@@ -1,4 +1,4 @@
-import { z } from "azot/v2";
+import { z } from "azot";
 
 export const contentMetadataSchema = z.object({
   name: z.string(),

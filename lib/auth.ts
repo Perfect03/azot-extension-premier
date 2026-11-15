@@ -1,4 +1,4 @@
-import { abortable, confirm, ExtensionError, z, type AuthRequest } from "azot/v2";
+import { abortable, confirm, ExtensionError, z, type AuthRequest } from "azot";
 import { request } from "./api.ts";
 import { ROUTES, DEVICE } from "./constants.ts";
 
@@ -44,8 +44,8 @@ export const signOut = () => {
 };
 
 /** Pairs a TV device only when the host explicitly requests interactive login. */
-export const signIn = async ({ method, signal }: AuthRequest) => {
-  signal?.throwIfAborted();
+export const signIn = async ({ method }: AuthRequest) => {
+  Azot.signal.throwIfAborted();
   if (method !== "interactive") {
     throw new Error("Premier supports interactive device login only");
   }
@@ -54,7 +54,6 @@ export const signIn = async ({ method, signal }: AuthRequest) => {
     const registration = await request(ROUTES.smartRegister, registrationSchema, {
       method: "POST",
       body: JSON.stringify(DEVICE),
-      signal,
     });
     const code = registration.result.activationCode;
     const confirmed = await abortable(
@@ -62,13 +61,13 @@ export const signIn = async ({ method, signal }: AuthRequest) => {
         title: "Вход в Premier",
         primaryAction: { title: "Устройство подключено" },
       }),
-      signal,
+      Azot.signal,
     );
-    signal?.throwIfAborted();
+    Azot.signal.throwIfAborted();
     if (!confirmed) throw new DOMException("Premier sign-in was cancelled", "AbortError");
 
-    const { result } = await request(ROUTES.smartCheck(code), activationSchema, { signal });
-    signal?.throwIfAborted();
+    const { result } = await request(ROUTES.smartCheck(code), activationSchema);
+    Azot.signal.throwIfAborted();
     if (!result.isActivated) continue;
 
     const values = {
