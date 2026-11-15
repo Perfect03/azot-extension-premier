@@ -1,4 +1,4 @@
-import { defineExtension, ExtensionError, Input, UrlSource, utils, type MediaEntry } from "azot/v2";
+import { abortable, defineExtension, ExtensionError, Input, sleep, UrlSource, utils, z, type MediaEntry } from "azot/v2";
 import { getAuthState, signIn, signOut } from "./lib/auth.ts";
 import {
   fetchTitleMetainfo,
@@ -7,6 +7,18 @@ import {
   fetchPlayOptions,
 } from "./lib/api.ts";
 import { parsePremierUrl } from "./lib/helpers.ts";
+
+const LICENSE_REQUEST_ATTEMPTS = 5;
+const licenseProblemSchema = z.object({
+  title: z.string().max(512).optional(),
+  detail: z.string().max(512).optional(),
+});
+
+const redactLicenseReason = (reason: string) =>
+  reason
+    .replace(/https?:\/\/\S+|\b(?:Bearer|JWTBearer|Basic)\s+\S+/gi, "[redacted]")
+    .replace(/\b(?:token|password|secret|cookie|signature)\s*[:=]\s*\S+/gi, "[redacted]")
+    .replace(/[A-Za-z0-9+/_=-]{32,}/g, "[redacted]");
 
 type PremierContext = {
   licenseUrl?: string;
@@ -91,22 +103,42 @@ export default defineExtension<PremierContext>({
       const licenseUrl = resource.entry.context?.licenseUrl;
       if (!licenseUrl) {
         throw new ExtensionError({
-          code: "DRM_UNAUTHORIZED",
+          code: "UNKNOWN",
           message: "Premier license URL is missing",
+          operation: "requestLicense",
         });
       }
 
-      const response = await fetch(licenseUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/octet-stream" },
-        body: data,
-        signal,
-      });
-      if (!response.ok) {
+      let response: Response;
+      for (let attempt = 1; ; attempt++) {
+        signal?.throwIfAborted();
+        response = await fetch(licenseUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: data,
+          signal,
+        });
+        if (response.ok) break;
+        const parsed = licenseProblemSchema.safeParse(await response.json().catch(() => null));
+        const problem = parsed.success ? parsed.data : {};
+        const isTransient = response.status === 400
+          && problem.title === "Failed to get license restrictions"
+          && problem.detail === "Remote server is not available or returned error code";
+        if (isTransient && attempt < LICENSE_REQUEST_ATTEMPTS) {
+          await abortable(sleep(2 ** (attempt - 1) * 1000), signal);
+          continue;
+        }
         throw new ExtensionError({
-          code: "DRM_UNAUTHORIZED",
+          code: "UNKNOWN",
           message: `Premier license request failed (${response.status})`,
           operation: "requestLicense",
+          // The host includes causes in exported logs, but skips extension-specific details.
+          cause: new Error(JSON.stringify({
+            contentId: resource.entry.id,
+            status: response.status,
+            title: problem.title && redactLicenseReason(problem.title),
+            detail: problem.detail && redactLicenseReason(problem.detail),
+          })),
         });
       }
       const license = new Uint8Array(await response.arrayBuffer());
@@ -118,8 +150,9 @@ export default defineExtension<PremierContext>({
         .match(/"(CAIS[A-Za-z0-9+/=]*)"/)?.[1];
       if (!encodedLicense) {
         throw new ExtensionError({
-          code: "DRM_UNAUTHORIZED",
+          code: "UNKNOWN",
           message: "Premier license response is invalid",
+          operation: "requestLicense",
         });
       }
       return Uint8Array.fromBase64(encodedLicense);
